@@ -598,7 +598,7 @@ static struct sock *x25_make_new(struct sock *osk)
 	x25 = x25_sk(sk);
 
 	sk->sk_type        = osk->sk_type;
-	sk->sk_priority    = osk->sk_priority;
+	sk->sk_priority    = READ_ONCE(osk->sk_priority);
 	sk->sk_protocol    = osk->sk_protocol;
 	sk->sk_rcvbuf      = osk->sk_rcvbuf;
 	sk->sk_sndbuf      = osk->sk_sndbuf;
@@ -722,6 +722,11 @@ static int x25_wait_for_connection_establishment(struct sock *sk)
 			break;
 		rc = sock_error(sk);
 		if (rc) {
+			sk->sk_socket->state = SS_UNCONNECTED;
+			break;
+		}
+		rc = -ENOTCONN;
+		if (sk->sk_state == TCP_CLOSE) {
 			sk->sk_socket->state = SS_UNCONNECTED;
 			break;
 		}
@@ -1321,8 +1326,7 @@ static int x25_recvmsg(struct socket *sock, struct msghdr *msg, size_t size,
 	} else {
 		/* Now we can treat all alike */
 		release_sock(sk);
-		skb = skb_recv_datagram(sk, flags & ~MSG_DONTWAIT,
-					flags & MSG_DONTWAIT, &rc);
+		skb = skb_recv_datagram(sk, flags, &rc);
 		lock_sock(sk);
 		if (!skb)
 			goto out;
@@ -1753,7 +1757,6 @@ static const struct proto_ops x25_proto_ops = {
 	.sendmsg =	x25_sendmsg,
 	.recvmsg =	x25_recvmsg,
 	.mmap =		sock_no_mmap,
-	.sendpage =	sock_no_sendpage,
 };
 
 static struct packet_type x25_packet_type __read_mostly = {

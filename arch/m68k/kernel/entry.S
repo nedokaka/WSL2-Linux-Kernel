@@ -1,12 +1,9 @@
-/* -*- mode: asm -*-
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * -*- mode: asm -*-
  *
  *  linux/arch/m68k/kernel/entry.S
  *
  *  Copyright (C) 1991, 1992  Linus Torvalds
- *
- * This file is subject to the terms and conditions of the GNU General Public
- * License.  See the file README.legal in the main directory of this archive
- * for more details.
  *
  * Linux/m68k support by Hamish Macdonald
  *
@@ -181,7 +178,7 @@ do_trace_entry:
 	movel	#-ENOSYS,%sp@(PT_OFF_D0)| needed for strace
 	subql	#4,%sp
 	SAVE_SWITCH_STACK
-	jbsr	syscall_trace
+	jbsr	syscall_trace_enter
 	RESTORE_SWITCH_STACK
 	addql	#4,%sp
 	addql	#1,%d0			| optimization for cmpil #-1,%d0
@@ -197,7 +194,7 @@ badsys:
 do_trace_exit:
 	subql	#4,%sp
 	SAVE_SWITCH_STACK
-	jbsr	syscall_trace
+	jbsr	syscall_trace_leave
 	RESTORE_SWITCH_STACK
 	addql	#4,%sp
 	jra	.Lret_from_exception
@@ -214,6 +211,9 @@ ENTRY(system_call)
 	| syscall trace?
 	tstb	%a1@(TINFO_FLAGS+2)
 	jmi	do_trace_entry
+	| seccomp filter active?
+	btst	#5,%a1@(TINFO_FLAGS+2)
+	bnes	do_trace_entry
 	cmpl	#NR_syscalls,%d0
 	jcc	badsys
 syscall:

@@ -52,10 +52,8 @@ struct insn_emulation {
 	int min;
 	int max;
 
-	/*
-	 * sysctl for this emulation + a sentinal entry.
-	 */
-	struct ctl_table sysctl[2];
+	/* sysctl for this emulation */
+	struct ctl_table sysctl;
 };
 
 #define ARM_OPCODE_CONDTEST_FAIL   0
@@ -99,7 +97,7 @@ static unsigned int __maybe_unused aarch32_check_condition(u32 opcode, u32 psr)
 do {								\
 	uaccess_enable_privileged();				\
 	__asm__ __volatile__(					\
-	"	mov		%w3, %w7\n"			\
+	"	mov		%w3, %w6\n"			\
 	"0:	ldxr"B"		%w2, [%4]\n"			\
 	"1:	stxr"B"		%w0, %w1, [%4]\n"		\
 	"	cbz		%w0, 2f\n"			\
@@ -110,16 +108,10 @@ do {								\
 	"2:\n"							\
 	"	mov		%w1, %w2\n"			\
 	"3:\n"							\
-	"	.pushsection	 .fixup,\"ax\"\n"		\
-	"	.align		2\n"				\
-	"4:	mov		%w0, %w6\n"			\
-	"	b		3b\n"				\
-	"	.popsection"					\
-	_ASM_EXTABLE(0b, 4b)					\
-	_ASM_EXTABLE(1b, 4b)					\
+	_ASM_EXTABLE_UACCESS_ERR(0b, 3b, %w0)			\
+	_ASM_EXTABLE_UACCESS_ERR(1b, 3b, %w0)			\
 	: "=&r" (res), "+r" (data), "=&r" (temp), "=&r" (temp2)	\
 	: "r" ((unsigned long)addr), "i" (-EAGAIN),		\
-	  "i" (-EFAULT),					\
 	  "i" (__SWP_LL_SC_LOOPS)				\
 	: "memory");						\
 	uaccess_disable_privileged();				\
@@ -426,14 +418,14 @@ static DEFINE_MUTEX(insn_emulation_mutex);
 
 static void enable_insn_hw_mode(void *data)
 {
-	struct insn_emulation *insn = (struct insn_emulation *)data;
+	struct insn_emulation *insn = data;
 	if (insn->set_hw_mode)
 		insn->set_hw_mode(true);
 }
 
 static void disable_insn_hw_mode(void *data)
 {
-	struct insn_emulation *insn = (struct insn_emulation *)data;
+	struct insn_emulation *insn = data;
 	if (insn->set_hw_mode)
 		insn->set_hw_mode(false);
 }
@@ -458,7 +450,6 @@ static int run_all_cpu_set_hw_mode(struct insn_emulation *insn, bool enable)
  */
 static int run_all_insn_set_hw_mode(unsigned int cpu)
 {
-	int i;
 	int rc = 0;
 	unsigned long flags;
 
@@ -468,7 +459,7 @@ static int run_all_insn_set_hw_mode(unsigned int cpu)
 	 * recent enablement state if the two race with one another.
 	 */
 	local_irq_save(flags);
-	for (i = 0; i < ARRAY_SIZE(insn_emulations); i++) {
+	for (int i = 0; i < ARRAY_SIZE(insn_emulations); i++) {
 		struct insn_emulation *insn = insn_emulations[i];
 		bool enable = READ_ONCE(insn->current_mode) == INSN_HW;
 		if (insn->set_hw_mode && insn->set_hw_mode(enable)) {
@@ -565,7 +556,7 @@ static void __init register_insn_emulation(struct insn_emulation *insn)
 	update_insn_emulation_mode(insn, INSN_UNDEF);
 
 	if (insn->status != INSN_UNAVAILABLE) {
-		sysctl = &insn->sysctl[0];
+		sysctl = &insn->sysctl;
 
 		sysctl->mode = 0644;
 		sysctl->maxlen = sizeof(int);
@@ -576,15 +567,13 @@ static void __init register_insn_emulation(struct insn_emulation *insn)
 		sysctl->extra2 = &insn->max;
 		sysctl->proc_handler = emulation_proc_handler;
 
-		register_sysctl("abi", sysctl);
+		register_sysctl_sz("abi", sysctl, 1);
 	}
 }
 
 bool try_emulate_armv8_deprecated(struct pt_regs *regs, u32 insn)
 {
-	int i;
-
-	for (i = 0; i < ARRAY_SIZE(insn_emulations); i++) {
+	for (int i = 0; i < ARRAY_SIZE(insn_emulations); i++) {
 		struct insn_emulation *ie = insn_emulations[i];
 
 		if (ie->status == INSN_UNAVAILABLE)
@@ -611,8 +600,6 @@ bool try_emulate_armv8_deprecated(struct pt_regs *regs, u32 insn)
  */
 static int __init armv8_deprecated_init(void)
 {
-	int i;
-
 #ifdef CONFIG_SETEND_EMULATION
 	if (!system_supports_mixed_endian_el0()) {
 		insn_setend.status = INSN_UNAVAILABLE;
@@ -620,7 +607,7 @@ static int __init armv8_deprecated_init(void)
 	}
 
 #endif
-	for (i = 0; i < ARRAY_SIZE(insn_emulations); i++) {
+	for (int i = 0; i < ARRAY_SIZE(insn_emulations); i++) {
 		struct insn_emulation *ie = insn_emulations[i];
 
 		if (ie->status == INSN_UNAVAILABLE)

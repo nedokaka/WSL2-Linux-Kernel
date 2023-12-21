@@ -19,11 +19,12 @@
 
 static bool hyperv_initialized;
 
-void __init hyperv_early_init(void)
+static int __init hyperv_init(void)
 {
 	struct hv_get_vp_registers_output	result;
 	u32	a, b, c, d;
 	u64	guest_id;
+	int	ret;
 
 	/*
 	 * Allow for a kernel built with CONFIG_HYPERV to be running in
@@ -31,13 +32,13 @@ void __init hyperv_early_init(void)
 	 * In such cases, do nothing and return success.
 	 */
 	if (acpi_disabled)
-		return;
+		return 0;
 
 	if (strncmp((char *)&acpi_gbl_FADT.hypervisor_id, "MsHyperV", 8))
-		return;
+		return 0;
 
 	/* Setup the guest ID */
-	guest_id = generate_guest_id(0, LINUX_VERSION_CODE, 0);
+	guest_id = hv_generate_guest_id(LINUX_VERSION_CODE);
 	hv_set_vpreg(HV_REGISTER_GUEST_OSID, guest_id);
 
 	/* Get the features and hints from Hyper-V */
@@ -62,24 +63,18 @@ void __init hyperv_early_init(void)
 	pr_info("Hyper-V: Host Build %d.%d.%d.%d-%d-%d\n",
 		b >> 16, b & 0xFFFF, a,	d & 0xFFFFFF, c, d >> 24);
 
-	hyperv_initialized = true;
-}
-
-static int __init hyperv_init(void)
-{
-	int ret;
-
 	ret = hv_common_init();
 	if (ret)
 		return ret;
 
-	ret = cpuhp_setup_state(CPUHP_AP_ONLINE_DYN, "arm64/hyperv_init:online",
+	ret = cpuhp_setup_state(CPUHP_AP_HYPERV_ONLINE, "arm64/hyperv_init:online",
 				hv_common_cpu_init, hv_common_cpu_die);
 	if (ret < 0) {
 		hv_common_free();
 		return ret;
 	}
 
+	hyperv_initialized = true;
 	return 0;
 }
 

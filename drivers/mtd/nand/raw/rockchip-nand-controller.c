@@ -15,7 +15,6 @@
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/rawnand.h>
 #include <linux/of.h>
-#include <linux/of_device.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 
@@ -159,8 +158,7 @@ struct rk_nfc_nand_chip {
 	u32 timing;
 
 	u8 nsels;
-	u8 sels[];
-	/* Nothing after this field. */
+	u8 sels[] __counted_by(nsels);
 };
 
 struct rk_nfc {
@@ -920,8 +918,7 @@ static int rk_nfc_enable_clks(struct device *dev, struct rk_nfc *nfc)
 	ret = clk_prepare_enable(nfc->ahb_clk);
 	if (ret) {
 		dev_err(dev, "failed to enable ahb clk\n");
-		if (!IS_ERR(nfc->nfc_clk))
-			clk_disable_unprepare(nfc->nfc_clk);
+		clk_disable_unprepare(nfc->nfc_clk);
 		return ret;
 	}
 
@@ -930,8 +927,7 @@ static int rk_nfc_enable_clks(struct device *dev, struct rk_nfc *nfc)
 
 static void rk_nfc_disable_clks(struct rk_nfc *nfc)
 {
-	if (!IS_ERR(nfc->nfc_clk))
-		clk_disable_unprepare(nfc->nfc_clk);
+	clk_disable_unprepare(nfc->nfc_clk);
 	clk_disable_unprepare(nfc->ahb_clk);
 }
 
@@ -1122,7 +1118,7 @@ static int rk_nfc_nand_chip_init(struct device *dev, struct rk_nfc *nfc,
 		return -EINVAL;
 	}
 
-	rknand = devm_kzalloc(dev, sizeof(*rknand) + nsels * sizeof(u8),
+	rknand = devm_kzalloc(dev, struct_size(rknand, sels, nsels),
 			      GFP_KERNEL);
 	if (!rknand)
 		return -ENOMEM;
@@ -1408,7 +1404,6 @@ static int rk_nfc_probe(struct platform_device *pdev)
 
 	irq = platform_get_irq(pdev, 0);
 	if (irq < 0) {
-		dev_err(dev, "no NFC irq resource\n");
 		ret = -EINVAL;
 		goto clk_disable;
 	}
@@ -1435,7 +1430,7 @@ release_nfc:
 	return ret;
 }
 
-static int rk_nfc_remove(struct platform_device *pdev)
+static void rk_nfc_remove(struct platform_device *pdev)
 {
 	struct rk_nfc *nfc = platform_get_drvdata(pdev);
 
@@ -1443,8 +1438,6 @@ static int rk_nfc_remove(struct platform_device *pdev)
 	kfree(nfc->oob_buf);
 	rk_nfc_chips_cleanup(nfc);
 	rk_nfc_disable_clks(nfc);
-
-	return 0;
 }
 
 static int __maybe_unused rk_nfc_suspend(struct device *dev)
@@ -1484,7 +1477,7 @@ static const struct dev_pm_ops rk_nfc_pm_ops = {
 
 static struct platform_driver rk_nfc_driver = {
 	.probe = rk_nfc_probe,
-	.remove = rk_nfc_remove,
+	.remove_new = rk_nfc_remove,
 	.driver = {
 		.name = "rockchip-nfc",
 		.of_match_table = rk_nfc_id_table,

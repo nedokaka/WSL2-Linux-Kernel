@@ -208,8 +208,8 @@ static int binder_update_page_range(struct binder_alloc *alloc, int allocate,
 		}
 	}
 
-	if (need_mm && mmget_not_zero(alloc->vma_vm_mm))
-		mm = alloc->vma_vm_mm;
+	if (need_mm && mmget_not_zero(alloc->mm))
+		mm = alloc->mm;
 
 	if (mm) {
 		mmap_write_lock(mm);
@@ -740,7 +740,7 @@ int binder_alloc_mmap_handler(struct binder_alloc *alloc,
 	const char *failure_string;
 	struct binder_buffer *buffer;
 
-	if (unlikely(vma->vm_mm != alloc->vma_vm_mm)) {
+	if (unlikely(vma->vm_mm != alloc->mm)) {
 		ret = -EINVAL;
 		failure_string = "invalid vma->vm_mm";
 		goto err_invalid_mm;
@@ -861,8 +861,8 @@ void binder_alloc_deferred_release(struct binder_alloc *alloc)
 		kfree(alloc->pages);
 	}
 	mutex_unlock(&alloc->mutex);
-	if (alloc->vma_vm_mm)
-		mmdrop(alloc->vma_vm_mm);
+	if (alloc->mm)
+		mmdrop(alloc->mm);
 
 	binder_alloc_debug(BINDER_DEBUG_OPEN_CLOSE,
 		     "%s: %d buffers %d, pages %d\n",
@@ -1000,7 +1000,7 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 	index = page - alloc->pages;
 	page_addr = (uintptr_t)alloc->buffer + index * PAGE_SIZE;
 
-	mm = alloc->vma_vm_mm;
+	mm = alloc->mm;
 	if (!mmget_not_zero(mm))
 		goto err_mmget;
 	if (!mmap_read_trylock(mm))
@@ -1013,7 +1013,7 @@ enum lru_status binder_alloc_free_page(struct list_head *item,
 	if (vma) {
 		trace_binder_unmap_user_start(alloc, index);
 
-		zap_page_range(vma, page_addr, PAGE_SIZE);
+		zap_page_range_single(vma, page_addr, PAGE_SIZE, NULL);
 
 		trace_binder_unmap_user_end(alloc, index);
 	}
@@ -1043,25 +1043,17 @@ err_get_alloc_mutex_failed:
 static unsigned long
 binder_shrink_count(struct shrinker *shrink, struct shrink_control *sc)
 {
-	unsigned long ret = list_lru_count(&binder_alloc_lru);
-	return ret;
+	return list_lru_count(&binder_alloc_lru);
 }
 
 static unsigned long
 binder_shrink_scan(struct shrinker *shrink, struct shrink_control *sc)
 {
-	unsigned long ret;
-
-	ret = list_lru_walk(&binder_alloc_lru, binder_alloc_free_page,
+	return list_lru_walk(&binder_alloc_lru, binder_alloc_free_page,
 			    NULL, sc->nr_to_scan);
-	return ret;
 }
 
-static struct shrinker binder_shrinker = {
-	.count_objects = binder_shrink_count,
-	.scan_objects = binder_shrink_scan,
-	.seeks = DEFAULT_SEEKS,
-};
+static struct shrinker *binder_shrinker;
 
 /**
  * binder_alloc_init() - called by binder_open() for per-proc initialization
@@ -1073,27 +1065,37 @@ static struct shrinker binder_shrinker = {
 void binder_alloc_init(struct binder_alloc *alloc)
 {
 	alloc->pid = current->group_leader->pid;
-	alloc->vma_vm_mm = current->mm;
-	mmgrab(alloc->vma_vm_mm);
+	alloc->mm = current->mm;
+	mmgrab(alloc->mm);
 	mutex_init(&alloc->mutex);
 	INIT_LIST_HEAD(&alloc->buffers);
 }
 
 int binder_alloc_shrinker_init(void)
 {
-	int ret = list_lru_init(&binder_alloc_lru);
+	int ret;
 
-	if (ret == 0) {
-		ret = register_shrinker(&binder_shrinker);
-		if (ret)
-			list_lru_destroy(&binder_alloc_lru);
+	ret = list_lru_init(&binder_alloc_lru);
+	if (ret)
+		return ret;
+
+	binder_shrinker = shrinker_alloc(0, "android-binder");
+	if (!binder_shrinker) {
+		list_lru_destroy(&binder_alloc_lru);
+		return -ENOMEM;
 	}
-	return ret;
+
+	binder_shrinker->count_objects = binder_shrink_count;
+	binder_shrinker->scan_objects = binder_shrink_scan;
+
+	shrinker_register(binder_shrinker);
+
+	return 0;
 }
 
 void binder_alloc_shrinker_exit(void)
 {
-	unregister_shrinker(&binder_shrinker);
+	shrinker_free(binder_shrinker);
 	list_lru_destroy(&binder_alloc_lru);
 }
 
@@ -1181,14 +1183,11 @@ static void binder_alloc_clear_buf(struct binder_alloc *alloc,
 		unsigned long size;
 		struct page *page;
 		pgoff_t pgoff;
-		void *kptr;
 
 		page = binder_alloc_get_page(alloc, buffer,
 					     buffer_offset, &pgoff);
 		size = min_t(size_t, bytes, PAGE_SIZE - pgoff);
-		kptr = kmap(page) + pgoff;
-		memset(kptr, 0, size);
-		kunmap(page);
+		memset_page(page, pgoff, 0, size);
 		bytes -= size;
 		buffer_offset += size;
 	}
@@ -1226,9 +1225,9 @@ binder_alloc_copy_user_to_buffer(struct binder_alloc *alloc,
 		page = binder_alloc_get_page(alloc, buffer,
 					     buffer_offset, &pgoff);
 		size = min_t(size_t, bytes, PAGE_SIZE - pgoff);
-		kptr = kmap(page) + pgoff;
+		kptr = kmap_local_page(page) + pgoff;
 		ret = copy_from_user(kptr, from, size);
-		kunmap(page);
+		kunmap_local(kptr);
 		if (ret)
 			return bytes - size + ret;
 		bytes -= size;
@@ -1253,23 +1252,14 @@ static int binder_alloc_do_buffer_copy(struct binder_alloc *alloc,
 		unsigned long size;
 		struct page *page;
 		pgoff_t pgoff;
-		void *tmpptr;
-		void *base_ptr;
 
 		page = binder_alloc_get_page(alloc, buffer,
 					     buffer_offset, &pgoff);
 		size = min_t(size_t, bytes, PAGE_SIZE - pgoff);
-		base_ptr = kmap_atomic(page);
-		tmpptr = base_ptr + pgoff;
 		if (to_buffer)
-			memcpy(tmpptr, ptr, size);
+			memcpy_to_page(page, pgoff, ptr, size);
 		else
-			memcpy(ptr, tmpptr, size);
-		/*
-		 * kunmap_atomic() takes care of flushing the cache
-		 * if this device has VIVT cache arch
-		 */
-		kunmap_atomic(base_ptr);
+			memcpy_from_page(ptr, page, pgoff, size);
 		bytes -= size;
 		pgoff = 0;
 		ptr = ptr + size;

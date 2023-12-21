@@ -76,13 +76,13 @@ static void fuse_add_dirent_to_cache(struct file *file,
 	    WARN_ON(fi->rdc.pos != pos))
 		goto unlock;
 
-	addr = kmap_atomic(page);
+	addr = kmap_local_page(page);
 	if (!offset) {
 		clear_page(addr);
 		SetPageUptodate(page);
 	}
 	memcpy(addr + offset, dirent, reclen);
-	kunmap_atomic(addr);
+	kunmap_local(addr);
 	fi->rdc.size = (index << PAGE_SHIFT) + offset + reclen;
 	fi->rdc.pos = dirent->off;
 unlock:
@@ -223,8 +223,8 @@ retry:
 		spin_unlock(&fi->lock);
 
 		forget_all_cached_acls(inode);
-		fuse_change_attributes(inode, &o->attr,
-				       entry_attr_timeout(o),
+		fuse_change_attributes(inode, &o->attr, NULL,
+				       ATTR_TIMEOUT(o),
 				       attr_version);
 		/*
 		 * The other branch comes via fuse_iget()
@@ -232,7 +232,7 @@ retry:
 		 */
 	} else {
 		inode = fuse_iget(dir->i_sb, o->nodeid, o->generation,
-				  &o->attr, entry_attr_timeout(o),
+				  &o->attr, ATTR_TIMEOUT(o),
 				  attr_version);
 		if (!inode)
 			inode = ERR_PTR(-ENOMEM);
@@ -464,7 +464,7 @@ static int fuse_readdir_cached(struct file *file, struct dir_context *ctx)
 	 * cache; both cases require an up-to-date mtime value.
 	 */
 	if (!ctx->pos && fc->auto_inval_data) {
-		int err = fuse_update_attributes(inode, file);
+		int err = fuse_update_attributes(inode, file, STATX_MTIME);
 
 		if (err)
 			return err;
@@ -476,7 +476,7 @@ retry_locked:
 	if (!fi->rdc.cached) {
 		/* Starting cache? Set cache mtime. */
 		if (!ctx->pos && !fi->rdc.size) {
-			fi->rdc.mtime = inode->i_mtime;
+			fi->rdc.mtime = inode_get_mtime(inode);
 			fi->rdc.iversion = inode_query_iversion(inode);
 		}
 		spin_unlock(&fi->rdc.lock);
@@ -488,8 +488,10 @@ retry_locked:
 	 * changed, and reset the cache if so.
 	 */
 	if (!ctx->pos) {
+		struct timespec64 mtime = inode_get_mtime(inode);
+
 		if (inode_peek_iversion(inode) != fi->rdc.iversion ||
-		    !timespec64_equal(&fi->rdc.mtime, &inode->i_mtime)) {
+		    !timespec64_equal(&fi->rdc.mtime, &mtime)) {
 			fuse_rdc_reset(inode);
 			goto retry_locked;
 		}
@@ -555,9 +557,9 @@ retry_locked:
 	 * Contents of the page are now protected against changing by holding
 	 * the page lock.
 	 */
-	addr = kmap(page);
+	addr = kmap_local_page(page);
 	res = fuse_parse_cache(ff, addr, size, ctx);
-	kunmap(page);
+	kunmap_local(addr);
 	unlock_page(page);
 	put_page(page);
 

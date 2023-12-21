@@ -43,13 +43,15 @@
 #include <linux/tty.h>
 #include <linux/binfmts.h>
 #include <linux/extable.h>
-#include <linux/tracehook.h>
+#include <linux/resume_user_mode.h>
 
 #include <asm/setup.h>
 #include <linux/uaccess.h>
 #include <asm/traps.h>
 #include <asm/ucontext.h>
 #include <asm/cacheflush.h>
+
+#include "signal.h"
 
 #ifdef CONFIG_MMU
 
@@ -1109,12 +1111,12 @@ static void do_signal(struct pt_regs *regs)
 	restore_saved_sigmask();
 }
 
-void do_notify_resume(struct pt_regs *regs)
+asmlinkage void do_notify_resume(struct pt_regs *regs)
 {
 	if (test_thread_flag(TIF_NOTIFY_SIGNAL) ||
 	    test_thread_flag(TIF_SIGPENDING))
 		do_signal(regs);
 
 	if (test_thread_flag(TIF_NOTIFY_RESUME))
-		tracehook_notify_resume(regs);
+		resume_user_mode_work(regs);
 }
