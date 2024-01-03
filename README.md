@@ -5,22 +5,7 @@ configuration files for the [WSL2][about-wsl2] kernel.
 
 # Reporting Bugs
 
-If you discover an issue relating to WSL or the WSL2 kernel, please report it on
-the [WSL GitHub project][wsl-issue]. It is not possible to report issues on the
-[WSL2-Linux-Kernel][wsl2-kernel] project.
-
-If you're able to determine that the bug is present in the upstream Linux
-kernel, you may want to work directly with the upstream developers. Please note
-that there are separate processes for reporting a [normal bug][normal-bug] and
-a [security bug][security-bug].
-
-# Feature Requests
-
-Is there a missing feature that you'd like to see? Please request it on the
-[WSL GitHub project][wsl-issue].
-
-If you're able and interested in contributing kernel code for your feature
-request, we encourage you to [submit the change upstream][submit-patch].
+no.
 
 # Build Instructions
 
@@ -28,7 +13,7 @@ Instructions for building an x86_64 WSL2 kernel with an Ubuntu distribution are
 as follows:
 
 1. Install the build dependencies:  
-   `$ sudo apt install build-essential flex bison dwarves libssl-dev libelf-dev`
+   `$ sudo apt install build-essential flex bison dwarves libssl-dev libelf-dev bc libncurses-dev`
 2. Build the kernel using the WSL2 kernel configuration:  
    `$ make KCONFIG_CONFIG=Microsoft/config-wsl`
 
@@ -41,7 +26,15 @@ Shutdown wsl
 wsl --shutdown
 ```
 
-Push arch/x86/boot/bzImage to C:\Windows\System32\lxss\tools with file name kernel
+~~Push arch/x86/boot/bzImage to C:\Windows\System32\lxss\tools with file name kernel~~
+
+copy arch/x86/boot/bzImage anywhere you want (except wsl) and create a .wslconfig in %UserProfile% (Windows user home folder)
+and put it into a file
+```
+[wsl2]
+kernel=C:\\path\\to\\kernel
+```
+the path should be spelled with \\\
 
 Run your favorite gore wsl distro
 
