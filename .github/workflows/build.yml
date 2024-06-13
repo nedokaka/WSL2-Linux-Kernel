@@ -1,5 +1,4 @@
 name: Build kernel
-
 on:
   push:
     branches:
